@@ -27,6 +27,8 @@ function open(path, options, callback) {
   if (options.autoClose == null) options.autoClose = true;
   if (options.lazyEntries == null) options.lazyEntries = false;
   if (options.decodeStrings == null) options.decodeStrings = true;
+  if (options.validateCommentLength == null) options.validateCommentLength = false;
+  if (options.validateEntrySize == null) options.validateEntrySize = false;
   if (callback == null) callback = defaultCallback;
   fs.open(path, "r", function(err, fd) {
     if (err) return callback(err);
@@ -46,6 +48,8 @@ function fromFd(fd, options, callback) {
   if (options.autoClose == null) options.autoClose = false;
   if (options.lazyEntries == null) options.lazyEntries = false;
   if (options.decodeStrings == null) options.decodeStrings = true;
+  if (options.validateCommentLength == null) options.validateCommentLength = false;
+  if (options.validateEntrySize == null) options.validateEntrySize = false;
   if (callback == null) callback = defaultCallback;
   fs.fstat(fd, function(err, stats) {
     if (err) return callback(err);
@@ -63,6 +67,8 @@ function fromBuffer(buffer, options, callback) {
   options.autoClose = false;
   if (options.lazyEntries == null) options.lazyEntries = false;
   if (options.decodeStrings == null) options.decodeStrings = true;
+  if (options.validateCommentLength == null) options.validateCommentLength = false;
+  if (options.validateEntrySize == null) options.validateEntrySize = false;
   // i got your open file right here.
   var reader = fd_slicer.createFromBuffer(buffer);
   fromRandomAccessReader(reader, buffer.length, options, callback);
@@ -77,6 +83,8 @@ function fromRandomAccessReader(reader, totalSize, options, callback) {
   if (options.autoClose == null) options.autoClose = true;
   if (options.lazyEntries == null) options.lazyEntries = false;
   if (options.decodeStrings == null) options.decodeStrings = true;
+  if (options.validateCommentLength == null) options.validateCommentLength = false;
+  if (options.validateEntrySize == null) options.validateEntrySize = false;
   var decodeStrings = !!options.decodeStrings;
   if (callback == null) callback = defaultCallback;
   if (typeof totalSize !== "number") throw new Error("expected totalSize parameter to be a number");
@@ -121,7 +129,7 @@ function fromRandomAccessReader(reader, totalSize, options, callback) {
       // 20 - Comment length
       var commentLength = eocdrBuffer.readUInt16LE(20);
       var expectedCommentLength = eocdrBuffer.length - eocdrWithoutCommentSize;
-      if (commentLength !== expectedCommentLength) {
+      if (options.validateCommentLength && commentLength !== expectedCommentLength) {
         return callback(new Error("invalid comment length. expected: " + expectedCommentLength + ". found: " + commentLength));
       }
       // 22 - Comment
@@ -130,7 +138,7 @@ function fromRandomAccessReader(reader, totalSize, options, callback) {
                                   : eocdrBuffer.slice(22);
 
       if (!(entryCount === 0xffff || centralDirectoryOffset === 0xffffffff)) {
-        return callback(null, new ZipFile(reader, centralDirectoryOffset, totalSize, entryCount, comment, options.autoClose, options.lazyEntries, decodeStrings));
+        return callback(null, new ZipFile(reader, centralDirectoryOffset, totalSize, entryCount, comment, options.autoClose, options.lazyEntries, decodeStrings, options.validateEntrySize));
       }
 
       // ZIP64 format
@@ -171,7 +179,7 @@ function fromRandomAccessReader(reader, totalSize, options, callback) {
           // 48 - offset of start of central directory with respect to the starting disk number     8 bytes
           centralDirectoryOffset = readUInt64LE(zip64EocdrBuffer, 48);
           // 56 - zip64 extensible data sector                                (variable size)
-          return callback(null, new ZipFile(reader, centralDirectoryOffset, totalSize, entryCount, comment, options.autoClose, options.lazyEntries, decodeStrings));
+          return callback(null, new ZipFile(reader, centralDirectoryOffset, totalSize, entryCount, comment, options.autoClose, options.lazyEntries, decodeStrings, options.validateEntrySize));
         });
       });
       return;
@@ -181,7 +189,7 @@ function fromRandomAccessReader(reader, totalSize, options, callback) {
 }
 
 util.inherits(ZipFile, EventEmitter);
-function ZipFile(reader, centralDirectoryOffset, fileSize, entryCount, comment, autoClose, lazyEntries, decodeStrings) {
+function ZipFile(reader, centralDirectoryOffset, fileSize, entryCount, comment, autoClose, lazyEntries, decodeStrings, validateSize) {
   var self = this;
   EventEmitter.call(self);
   self.reader = reader;
@@ -201,6 +209,7 @@ function ZipFile(reader, centralDirectoryOffset, fileSize, entryCount, comment, 
   self.autoClose = !!autoClose;
   self.lazyEntries = !!lazyEntries;
   self.decodeStrings = !!decodeStrings;
+  self.validateSize = !!validateSize;
   self.isOpen = true;
   self.emittedError = false;
 
@@ -390,7 +399,7 @@ ZipFile.prototype.readEntry = function() {
 
       // validate file size
       if (entry.compressionMethod === 0) {
-        if (entry.compressedSize !== entry.uncompressedSize) {
+        if (self.validateSize && entry.compressedSize !== entry.uncompressedSize) {
           var msg = "compressed/uncompressed size mismatch for stored file: " + entry.compressedSize + " != " + entry.uncompressedSize;
           return emitErrorAndAutoClose(self, new Error(msg));
         }
